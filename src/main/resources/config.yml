@@ -1,0 +1,194 @@
+# ============================================================================
+#  NexoDB - zentrale Verwaltung aller Nexo-Ressourcen in einer MongoDB
+# ============================================================================
+#  Genau EIN Server im Netzwerk hat main-server: true. Nur dieser darf schreiben.
+#  Alle anderen Server lesen ausschliesslich und laden Nexo danach neu.
+# ============================================================================
+
+server:
+  # Eindeutiger Name dieses Servers. Taucht im Log, im /nexosync status und im
+  # Feld updatedBy jedes Dokuments auf. MUSS pro Server unterschiedlich sein.
+  server-id: "CHANGE-ME"
+
+  # true  = dieser Server ist die Quelle der Wahrheit und darf pushen
+  # false = dieser Server holt sich alles aus der Datenbank und schreibt nie zurueck
+  main-server: false
+
+  # Schutz gegen zwei Master: der Master traegt sich mit einem Lock-Dokument in die
+  # Datenbank ein. Steht ein zweiter Server auf main-server: true, bekommt er den Lock
+  # nicht und blockiert seine eigenen Pushes (mit dicker Warnung im Log).
+  # Auf false setzen heisst: beide duerfen schreiben - dann sind Konflikte moeglich.
+  enforce-single-master: true
+
+  # Wie lange der Master-Lock ohne Heartbeat gueltig bleibt. Stuerzt der Master ab,
+  # kann ein anderer Server nach dieser Zeit uebernehmen.
+  master-lock-ttl-seconds: 90
+
+  # Abstand der Heartbeats. Muss deutlich kleiner als die TTL sein.
+  master-heartbeat-seconds: 30
+
+mongodb:
+  # Fuer Change Streams (Echtzeit-Sync) wird ein Replica Set benoetigt.
+  # Beispiel Replica Set:  mongodb://user:pass@db1:27017,db2:27017/?replicaSet=rs0&authSource=admin
+  # Beispiel Atlas:        mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/?retryWrites=true
+  # Beispiel Standalone:   mongodb://user:pass@127.0.0.1:27017/?authSource=admin   (nur Polling)
+  uri: "mongodb://nexodb:changeme@127.0.0.1:27017/?authSource=admin"
+
+  database: "nexodb"
+
+  # Metadaten (ein Dokument pro Datei: Pfad, SHA-256, Groesse, Revision).
+  resources-collection: "nexo_resources"
+
+  # Revisionszaehler und Master-Lock.
+  state-collection: "nexo_sync_state"
+
+  # GridFS-Bucket fuer grosse Dateien (Collections <bucket>.files und <bucket>.chunks).
+  gridfs-bucket: "nexo_files"
+
+  pool:
+    # Der Treiber haelt einen eigenen Pool. 20 reicht fuer einen Minecraft-Server locker,
+    # da alle Zugriffe ueber einen einzigen Worker-Thread laufen.
+    max-size: 20
+    min-size: 2
+    max-idle-millis: 60000
+
+  timeouts:
+    connect-millis: 8000
+    read-millis: 30000
+    server-selection-millis: 10000
+
+  # Wiederholt Schreib-/Lesevorgaenge automatisch bei einem Replica-Set-Failover.
+  retry-writes: true
+  retry-reads: true
+
+  # w:majority - ein Push gilt erst als erledigt, wenn die Mehrheit des Replica Sets
+  # die Daten hat. Verhindert, dass ein Failover gerade gepushte Dateien verliert.
+  # Bei einem Standalone-mongod ohne Replica Set auf false setzen.
+  write-concern-majority: true
+
+sync:
+  # auto          = Change Streams, wenn das Cluster sie kann, sonst Polling (empfohlen)
+  # change-stream = Change Streams erzwingen (faellt bei Standalone trotzdem auf Polling zurueck)
+  # polling       = immer pollen
+  mode: "auto"
+
+  # Polling-Intervall. Im Change-Stream-Modus laeuft Polling nur als Sicherheitsnetz
+  # und wird automatisch auf das 6-fache gestreckt.
+  poll-interval-seconds: 20
+
+  # Sammelfenster: ein Master-Push erzeugt viele einzelne Change-Events. Der Consumer
+  # wartet nach dem letzten Event so lange, bevor er EINMAL synchronisiert.
+  reload-debounce-seconds: 5
+
+  # Consumer holen sich beim Serverstart den aktuellen Stand.
+  pull-on-start: true
+
+  # Master pusht beim Serverstart. Standardmaessig aus - ein versehentlich veralteter
+  # Master wuerde sonst beim Start die Datenbank ueberschreiben.
+  push-on-start: false
+
+  # Master pusht automatisch, sobald jemand 'nexo reload' ausfuehrt.
+  auto-push-on-nexo-reload: true
+
+  # Verzoegerung zwischen erkanntem Reload und Push (20 Ticks = 1 Sekunde).
+  # Muss lang genug sein, damit Nexo mit dem Neuladen fertig ist.
+  auto-push-delay-ticks: 100
+
+  # Consumer laden Nexo nach einem Pull mit geaenderten Dateien automatisch neu.
+  reload-after-pull: true
+
+  # Der Command, der dafuer abgesetzt wird.
+  reload-command: "nexo reload all"
+
+  # Commands, die als "jemand hat Nexo neu geladen" gewertet werden (ohne Slash,
+  # Praefix-Vergleich, Gross-/Kleinschreibung egal).
+  reload-triggers:
+    - "nexo reload"
+
+  # So lange nach einem selbst ausgeloesten Reload werden Reload-Events ignoriert.
+  # Verhindert die Schleife Pull -> Reload -> Push -> Change-Event -> Pull ...
+  reload-suppress-seconds: 20
+
+  # Optionale Nexo-API-Events, die zusaetzlich zum Command-Hook abgefangen werden.
+  # Werden per Reflection registriert; unbekannte Klassen werden still ignoriert,
+  # das Plugin bricht also bei einem Nexo-Update nicht.
+  nexo-event-classes:
+    - "com.nexomc.nexo.api.events.NexoItemsLoadedEvent"
+
+  # Loescht der Master eine Datei lokal, wird sie in der Datenbank als geloescht
+  # markiert und verschwindet beim naechsten Pull auf allen Consumern.
+  mark-remote-orphans-deleted: true
+
+  # Der Master ist die Quelle der Wahrheit und pullt normalerweise nicht.
+  # Nur einschalten, wenn du den Master bewusst aus der DB befuellen willst.
+  allow-master-pull: false
+
+  # Loesch-Markierungen (Tombstones) werden nach so vielen Tagen endgueltig entfernt.
+  # Muss groesser sein als die laengste realistische Offline-Zeit eines Servers.
+  tombstone-retention-days: 14
+
+performance:
+  # Dateien bis zu dieser Groesse werden direkt im Metadaten-Dokument gespeichert
+  # (spart pro Datei einen Round-Trip). Groessere gehen in GridFS.
+  # BSON-Dokumente duerfen maximal 16 MB gross sein - nicht darueber gehen.
+  inline-threshold-bytes: 262144
+
+  # Chunk-Groesse fuer GridFS-Dateien (1 MB).
+  gridfs-chunk-size-bytes: 1048576
+
+  # Sicherheitsnetz: groessere Dateien werden beim Push ignoriert (64 MB).
+  max-file-size-bytes: 67108864
+
+  # Anzahl der Dateien, fuer die der SHA-256-Hash im RAM vorgehalten wird.
+  # Verhindert, dass bei jedem Durchlauf alle Dateien neu gehasht werden.
+  hash-cache-size: 50000
+
+  # Loggt auch Syncs, bei denen sich nichts geaendert hat.
+  verbose-logging: false
+
+# ============================================================================
+#  Was wird synchronisiert?
+# ============================================================================
+#  source-path : Ordner, aus dem der MASTER liest
+#  target-path : Ordner, in den CONSUMER schreiben (Standard: wie source-path)
+#  includes    : Glob-Muster relativ zum Ordner. Leer = alle Dateien.
+#  excludes    : Glob-Muster, die trotz includes ignoriert werden.
+#  purge-local-orphans:
+#                true  = beim Pull werden lokale Dateien geloescht, die es in der
+#                        Datenbank nicht gibt. NUR fuer Ordner, die NexoDB allein
+#                        gehoeren (z.B. ein eigener external_packs-Unterordner).
+#                false = lokale Extra-Dateien bleiben liegen.
+#
+#  Alle Pfade sind relativ zum Server-Root (dort, wo der plugins-Ordner liegt).
+# ============================================================================
+sync-sets:
+  # 1) Alle Nexo-Konfigurationen (Items, Glyphs, Recipes, Mechanics, ...)
+  - id: "nexo-configs"
+    source-path: "plugins/Nexo"
+    target-path: "plugins/Nexo"
+    includes:
+      - "**/*.yml"
+    excludes:
+      # settings.yml enthaelt serverspezifische Einstellungen - die soll jeder
+      # Server selbst behalten.
+      - "settings.yml"
+      - "pack/**"
+      - "logs/**"
+      - "**/*.log"
+    purge-local-orphans: false
+
+  # 2) Der geteilte Resourcepack-Teil. Nexo liest alles unter pack/external_packs
+  #    automatisch mit ein - deshalb bekommt NexoDB hier einen eigenen Unterordner.
+  #    Lege deine gemeinsamen Texturen auf dem Master genau dort ab.
+  - id: "nexo-pack"
+    source-path: "plugins/Nexo/pack/external_packs/nexodb-shared"
+    target-path: "plugins/Nexo/pack/external_packs/nexodb-shared"
+    includes:
+      - "**/*.png"
+      - "**/*.json"
+      - "**/*.mcmeta"
+      - "**/*.ogg"
+      - "**/*.txt"
+      - "**/*.zip"
+    excludes: []
+    purge-local-orphans: true

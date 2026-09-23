@@ -1,0 +1,27 @@
+name: NexoDB
+version: '${version}'
+description: $description
+
+main: the.lion.nexoDB.NexoDB
+
+# Gebaut gegen die Paper-1.21.4-API, laeuft damit auf 1.21.4 bis 26.2.
+# Der Wert muss <= der Serverversion sein - '1.21' erfuellt das auf der ganzen Spanne.
+api-version: '1.21'
+
+authors: [ Thelion ]
+website: site.lion-craft.net
+
+# Paper-Plugin-Abhaengigkeiten. Nexo ist optional (required: false), muss aber VOR
+# NexoDB geladen werden, damit der Reload-Hook seine Event-Klassen findet.
+dependencies:
+  server:
+    Nexo:
+      load: BEFORE
+      required: false
+      join-classpath: true
+
+# Hinweis: Paper-Plugins haben KEINEN commands:- und keinen permissions:-Block.
+# Commands laufen ueber die Brigadier-API (NexoSyncCommand), die Rechte werden in
+# NexoDB.registerPermissions() angelegt:
+#   nexodb.use / nexodb.push / nexodb.pull / nexodb.status / nexodb.reload
+#   nexodb.admin  (buendelt alle, default: op)
