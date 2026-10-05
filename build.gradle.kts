@@ -50,7 +50,14 @@ tasks {
     }
 
     jar {
-        // Verhindert, dass das "duenne" Jar und das Shadow-Jar denselben Dateinamen belegen.
+        // Das "duenne" Jar enthaelt weder den MongoDB-Treiber noch die Relocations. Landet es
+        // in plugins/, scheitert der Start mit NoClassDefFoundError: com/mongodb/... - deshalb
+        // wird es gar nicht erst gebaut. "gradlew jar" baut stattdessen das Shadow-Jar, sodass
+        // in build/libs immer nur das eine, lauffaehige Jar liegt.
+        enabled = false
+        dependsOn(shadowJar)
+
+        // Verhindert, dass beide Tasks denselben Dateinamen als Output deklarieren.
         archiveClassifier.set("dev")
     }
 
